@@ -9,9 +9,18 @@ export const createConnection = async () => {
   }
 
   try {
+    const dbHost = process.env.DB_HOST || 'localhost';
+    const dbPort = parseInt(process.env.DB_PORT || '3306');
+    
+    logger.info('Connecting to database', { 
+      host: dbHost, 
+      port: dbPort,
+      database: process.env.DB_NAME || 'txuna_sites'
+    });
+    
     pool = mysql.createPool({
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '3306'),
+      host: dbHost,
+      port: dbPort,
       user: process.env.DB_USER || 'root',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'txuna_sites',
@@ -19,7 +28,9 @@ export const createConnection = async () => {
       connectionLimit: 10,
       queueLimit: 0,
       enableKeepAlive: true,
-      keepAliveInitialDelay: 0
+      keepAliveInitialDelay: 0,
+      connectTimeout: 10000, // 10 segundos
+      acquireTimeout: 10000
     });
 
     // Test connection
