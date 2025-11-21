@@ -1,0 +1,24 @@
+# Docker Compose para desenvolvimento
+# Uso: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      target: development
+    volumes:
+      # Montar código para hot reload
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    command: npm run dev
+    ports:
+      - "3000:3000"
+      - "9229:9229"  # Debug port
+
+  phpmyadmin:
+    profiles: []  # Sempre ativo em dev
+

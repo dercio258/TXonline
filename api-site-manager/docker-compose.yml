@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # API Site Manager
+  api:
+    build: .
+    container_name: txuna-api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=txuna_user
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=txuna_sites
+      - API_KEY=${API_KEY}
+      - BASE_DIR=/var/www
+      - MAIN_DOMAIN=${MAIN_DOMAIN:-mozloja.online}
+      - API_DOMAIN=${API_DOMAIN:-api.mozloja.online}
+      - USE_SSL=${USE_SSL:-true}
+      - SSL_EMAIL=${SSL_EMAIL:-admin@mozloja.online}
+    volumes:
+      # Compartilhar diretório de sites com host (para Nginx acessar)
+      - ./sites:/var/www
+      # Logs
+      - ./logs:/app/logs
+      # Uploads temporários
+      - ./uploads:/app/uploads
+      # Acesso ao socket do Docker (para criar containers dinamicamente)
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - mysql
+    restart: unless-stopped
+    networks:
+      - txuna-network
+
+  # MySQL para metadados e bancos WordPress
+  mysql:
+    image: mysql:8.0
+    container_name: txuna-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=txuna_sites
+      - MYSQL_USER=txuna_user
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - txuna-network
+    command: --default-authentication-plugin=mysql_native_password
+
+  # phpMyAdmin (opcional, para desenvolvimento)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: txuna-phpmyadmin
+    environment:
+      - PMA_HOST=mysql
+      - PMA_USER=txuna_user
+      - PMA_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+    networks:
+      - txuna-network
+    profiles:
+      - dev  # Apenas em desenvolvimento
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  txuna-network:
+    driver: bridge
+
