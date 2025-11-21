@@ -46,6 +46,23 @@ git pull origin main
 docker compose build --no-cache
 ```
 
+### 3. Erro npm ci sem package-lock.json
+
+**Erro:**
+```
+npm error The `npm ci` command can only install with an existing package-lock.json
+```
+
+**Solução:** O Dockerfile foi atualizado para usar `npm install`. Se ainda tiver o erro:
+
+```bash
+# Fazer pull das mudanças mais recentes
+git pull origin main
+
+# Reconstruir
+docker compose build --no-cache
+```
+
 ### 3. Versão Obsoleta no docker-compose.yml
 
 **Aviso:**
