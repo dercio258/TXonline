@@ -8,7 +8,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DB_HOST=host.docker.internal
+      - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=txuna_user
       - DB_PASSWORD=${DB_PASSWORD}
@@ -34,47 +34,46 @@ services:
     networks:
       - txuna-network
 
-  # MySQL - Usando MySQL nativo do servidor (comentado)
-  # Se precisar usar MySQL em container, descomente e use porta diferente:
-  # mysql:
-  #   image: mysql:8.0
-  #   container_name: txuna-mysql
-  #   environment:
-  #     - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-  #     - MYSQL_DATABASE=txuna_sites
-  #     - MYSQL_USER=txuna_user
-  #     - MYSQL_PASSWORD=${DB_PASSWORD}
-  #   volumes:
-  #     - mysql_data:/var/lib/mysql
-  #     - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
-  #   ports:
-  #     - "3307:3306"  # Porta alternativa para evitar conflito
-  #   restart: unless-stopped
-  #   networks:
-  #     - txuna-network
-  #   command: --default-authentication-plugin=mysql_native_password
+  # MySQL para metadados e bancos WordPress
+  # Usando porta 3307 no host para evitar conflito com MySQL nativo na porta 3306
+  mysql:
+    image: mysql:8.0
+    container_name: txuna-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=txuna_sites
+      - MYSQL_USER=txuna_user
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3307:3306"  # Porta 3307 no host, 3306 no container (evita conflito com MySQL nativo)
+    restart: unless-stopped
+    networks:
+      - txuna-network
+    command: --default-authentication-plugin=mysql_native_password
 
   # phpMyAdmin (opcional, para desenvolvimento)
-  # Descomente se quiser usar phpMyAdmin com MySQL nativo
-  # phpmyadmin:
-  #   image: phpmyadmin/phpmyadmin
-  #   container_name: txuna-phpmyadmin
-  #   environment:
-  #     - PMA_HOST=host.docker.internal
-  #     - PMA_USER=txuna_user
-  #     - PMA_PASSWORD=${DB_PASSWORD}
-  #   ports:
-  #     - "8080:80"
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   networks:
-  #     - txuna-network
-  #   profiles:
-  #     - dev  # Apenas em desenvolvimento
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: txuna-phpmyadmin
+    environment:
+      - PMA_HOST=mysql
+      - PMA_USER=txuna_user
+      - PMA_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "8080:80"
+    depends_on:
+      - mysql
+    networks:
+      - txuna-network
+    profiles:
+      - dev  # Apenas em desenvolvimento
 
-# volumes:
-#   mysql_data:
-#     driver: local  # Comentado pois usamos MySQL nativo
+volumes:
+  mysql_data:
+    driver: local
 
 networks:
   txuna-network:
