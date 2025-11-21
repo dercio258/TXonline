@@ -5,16 +5,17 @@ FROM node:18-alpine
 RUN apk add --no-cache \
     bash \
     curl \
-    nginx \
     mysql-client \
-    php81 \
-    php81-fpm \
-    php81-mysqli \
-    php81-xml \
-    php81-curl \
-    php81-mbstring \
-    php81-zip \
-    openssl
+    php82 \
+    php82-fpm \
+    php82-mysqli \
+    php82-xml \
+    php82-curl \
+    php82-mbstring \
+    php82-zip \
+    php82-opcache \
+    openssl \
+    wget
 
 # Instalar WP-CLI
 RUN curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && \
