@@ -1,4 +1,4 @@
-import { moveSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync } from 'fs';
+import { renameSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, rmdirSync } from 'fs';
 import { join, dirname } from 'path';
 import logger from '../utils/logger.js';
 import { MonitoringService } from './monitoring.service.js';
@@ -30,7 +30,7 @@ export class FileService {
         mkdirSync(destDir, { recursive: true });
       }
       
-      moveSync(file.path, destPath);
+      renameSync(file.path, destPath);
       uploadedFiles.push({
         name: file.originalname,
         path: destPath,
