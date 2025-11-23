@@ -20,7 +20,9 @@ export class SubdomainService {
   static async createSubdomain(subdomain, options = {}) {
     const fullDomain = `${subdomain}.${MAIN_DOMAIN}`;
     const sitePath = join(BASE_DIR, subdomain);
-    const installSSL = options.installSSL !== false && USE_SSL;
+    // Se installSSL for explicitamente true, instalar SSL
+    // Se não especificado, usar USE_SSL do ambiente
+    const installSSL = options.installSSL === true ? true : (options.installSSL !== false && USE_SSL);
     
     // Create Nginx configuration (HTTP first, SSL will be added after certificate)
     const nginxConfig = installSSL 

@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import logger from '../utils/logger.js';
 import { SubdomainService } from './subdomain.service.js';
@@ -31,8 +31,16 @@ export class SiteService {
     mkdirSync(sitePath, { recursive: true });
     logger.info('Site directory created', { path: sitePath });
     
-    // Create subdomain in Nginx
-    await SubdomainService.createSubdomain(subdomain);
+    // Create default index.html for static sites
+    if (type === 'static' || !type) {
+      const indexHtml = this.generateDefaultIndexHtml(subdomain);
+      const indexPath = join(sitePath, 'index.html');
+      writeFileSync(indexPath, indexHtml, 'utf8');
+      logger.info('Default index.html created', { path: indexPath });
+    }
+    
+    // Create subdomain in Nginx with SSL (automatic)
+    await SubdomainService.createSubdomain(subdomain, { installSSL: true });
     
     // Create site record in database
     const site = await SiteModel.create({
@@ -118,6 +126,36 @@ export class SiteService {
     
     logger.info('Site deleted', { siteId: id });
     return true;
+  }
+  
+  static generateDefaultIndexHtml(subdomain) {
+    const siteName = subdomain.charAt(0).toUpperCase() + subdomain.slice(1);
+    
+    return `<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${siteName} — Bem-vindo</title>
+  <style>
+    :root{--laranja:#ff7a00;--azul:#0066cc;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+    body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#fff;color:#222}
+    .card{padding:22px 28px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08);max-width:520px;text-align:left}
+    h1{margin:0 0 8px;font-size:20px;color:var(--laranja)}
+    p{margin:0 0 14px;color:#444}
+    .cta{display:inline-block;padding:10px 14px;border-radius:8px;background:var(--azul);color:#fff;text-decoration:none;font-weight:600}
+    small{display:block;margin-top:10px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Seja bem-vindo, ${siteName}!</h1>
+    <p>Esta página foi criada automaticamente pelo <strong>Txuna Site</strong> para apresentar e configurar seu site de forma rápida e profissional.</p>
+    <a class="cta" href="https://h.panel.txunasite.com" target="_blank" rel="noopener">Clique aqui para configurar</a>
+    <small>As cores principais são laranja e azul — personalize o texto e substitua <code>${siteName}</code>.</small>
+  </div>
+</body>
+</html>`;
   }
 }
 
