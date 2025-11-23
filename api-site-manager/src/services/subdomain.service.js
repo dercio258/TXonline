@@ -56,34 +56,45 @@ export class SubdomainService {
       }
     }
     
-    // Reload Nginx
-    // Em container, executar script no host via docker exec
+    // Reload Nginx - tentar múltiplas abordagens para garantir que funcione
     if (isDockerContainer) {
-      try {
-        // Tentar executar script no host via docker exec (se container tem acesso)
-        // Usar o próprio container para executar no host
-        const containerName = process.env.HOSTNAME || 'txuna-api';
-        const scriptPath = '/var/www/mozloja.online/api-site-manager/scripts/reload-nginx.sh';
-        
-        // Tentar executar via nsenter (acessa namespace do host)
-        try {
-          // Obter PID do processo init do host (geralmente 1)
+      let reloaded = false;
+      const reloadMethods = [
+        // Método 1: nsenter (mais confiável)
+        async () => {
           await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl reload nginx"`);
-          logger.info('Nginx reloaded successfully via nsenter');
-        } catch (nsenterError) {
-          // Fallback: tentar executar script mapeado (pode não funcionar se Nginx não está no container)
+          return 'nsenter';
+        },
+        // Método 2: Script mapeado
+        async () => {
           const reloadScript = '/usr/local/bin/reload-nginx.sh';
           if (existsSync(reloadScript)) {
             await execAsync(`sh ${reloadScript}`);
-            logger.info('Nginx reloaded successfully via script');
-          } else {
-            throw new Error('Could not reload Nginx: script not found and nsenter failed');
+            return 'script';
           }
+          throw new Error('Script not found');
+        },
+        // Método 3: Tentar diretamente (pode funcionar com privilégios)
+        async () => {
+          await execAsync('nginx -t && systemctl reload nginx');
+          return 'direct';
         }
-      } catch (error) {
-        logger.warn('Failed to reload Nginx automatically, manual reload required', { 
-          error: error.message 
-        });
+      ];
+      
+      for (const method of reloadMethods) {
+        try {
+          const methodName = await method();
+          logger.info(`Nginx reloaded successfully via ${methodName}`);
+          reloaded = true;
+          break;
+        } catch (error) {
+          logger.debug(`Reload method failed: ${error.message}`);
+          continue;
+        }
+      }
+      
+      if (!reloaded) {
+        logger.warn('All Nginx reload methods failed, manual reload required');
         logger.warn('Please reload manually: systemctl reload nginx');
         // Não lançar erro - site foi criado, apenas precisa reload manual
       }
