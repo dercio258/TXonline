@@ -5,6 +5,9 @@ import { join } from 'path';
 import logger from '../utils/logger.js';
 import { SSLService } from './ssl.service.js';
 
+// Verificar se está rodando em container Docker
+const isDockerContainer = existsSync('/.dockerenv');
+
 const execAsync = promisify(exec);
 const NGINX_AVAILABLE = process.env.NGINX_SITES_AVAILABLE || '/etc/nginx/sites-available';
 const NGINX_ENABLED = process.env.NGINX_SITES_ENABLED || '/etc/nginx/sites-enabled';
@@ -37,20 +40,34 @@ export class SubdomainService {
     }
     
     // Test Nginx configuration
-    try {
-      await execAsync('nginx -t');
-      logger.info('Nginx configuration test passed');
-    } catch (error) {
-      throw new Error(`Nginx configuration test failed: ${error.message}`);
+    // Se estiver em container Docker, pular validação (Nginx está no host)
+    if (isDockerContainer) {
+      logger.info('Skipping Nginx test in container (Nginx runs on host)');
+      logger.warn('Nginx configuration should be tested manually on host: nginx -t');
+    } else {
+      // Executar normalmente no host
+      try {
+        await execAsync('nginx -t');
+        logger.info('Nginx configuration test passed');
+      } catch (error) {
+        throw new Error(`Nginx configuration test failed: ${error.message}`);
+      }
     }
     
     // Reload Nginx
-    try {
-      await execAsync(NGINX_RELOAD);
-      logger.info('Nginx reloaded successfully');
-    } catch (error) {
-      logger.error('Failed to reload Nginx', { error: error.message });
-      throw new Error(`Failed to reload Nginx: ${error.message}`);
+    // Em container, não podemos recarregar Nginx diretamente
+    // O usuário precisa recarregar manualmente ou usar um script no host
+    if (isDockerContainer) {
+      logger.warn('Nginx reload skipped in container. Please reload manually: systemctl reload nginx');
+      logger.info('Nginx configuration created, manual reload required on host');
+    } else {
+      try {
+        await execAsync(NGINX_RELOAD);
+        logger.info('Nginx reloaded successfully');
+      } catch (error) {
+        logger.error('Failed to reload Nginx', { error: error.message });
+        throw new Error(`Failed to reload Nginx: ${error.message}`);
+      }
     }
     
     // Install SSL certificate if enabled
