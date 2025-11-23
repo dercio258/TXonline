@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { writeFileSync, existsSync, unlinkSync } from 'fs';
+import { writeFileSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import { join } from 'path';
 import logger from '../utils/logger.js';
 import { SSLService } from './ssl.service.js';
@@ -57,11 +57,25 @@ export class SubdomainService {
     }
     
     // Reload Nginx
-    // Em container, não podemos recarregar Nginx diretamente
-    // O usuário precisa recarregar manualmente ou usar um script no host
+    // Em container, usar script mapeado para recarregar no host
     if (isDockerContainer) {
-      logger.warn('Nginx reload skipped in container. Please reload manually: systemctl reload nginx');
-      logger.info('Nginx configuration created, manual reload required on host');
+      try {
+        const reloadScript = '/usr/local/bin/reload-nginx.sh';
+        if (existsSync(reloadScript)) {
+          await execAsync(`sh ${reloadScript}`);
+          logger.info('Nginx reloaded successfully via script');
+        } else {
+          // Fallback: tentar executar diretamente (pode funcionar se container tem privilégios)
+          await execAsync('systemctl reload nginx');
+          logger.info('Nginx reloaded successfully');
+        }
+      } catch (error) {
+        logger.warn('Failed to reload Nginx automatically, manual reload required', { 
+          error: error.message 
+        });
+        logger.warn('Please reload manually: systemctl reload nginx');
+        // Não lançar erro - site foi criado, apenas precisa reload manual
+      }
     } else {
       try {
         await execAsync(NGINX_RELOAD);
@@ -83,12 +97,25 @@ export class SubdomainService {
         const sslConfig = await SSLService.updateNginxSSLConfig(fullDomain, sitePath);
         writeFileSync(configPath, sslConfig);
         
-        // Reload Nginx again (apenas se não estiver em container)
-        if (!isDockerContainer) {
+        // Reload Nginx again (tentar automaticamente mesmo em container)
+        if (isDockerContainer) {
+          try {
+            const reloadScript = '/usr/local/bin/reload-nginx.sh';
+            if (existsSync(reloadScript)) {
+              await execAsync(`sh ${reloadScript}`);
+              logger.info('Nginx reloaded with SSL configuration via script');
+            } else {
+              await execAsync('systemctl reload nginx');
+              logger.info('Nginx reloaded with SSL configuration');
+            }
+          } catch (error) {
+            logger.warn('Failed to reload Nginx after SSL, manual reload required', { 
+              error: error.message 
+            });
+          }
+        } else {
           await execAsync(NGINX_RELOAD);
           logger.info('Nginx reloaded with SSL configuration');
-        } else {
-          logger.warn('Nginx reload skipped in container. Please reload manually: systemctl reload nginx');
         }
       } catch (error) {
         logger.warn('SSL installation failed, continuing without SSL', { 
@@ -214,20 +241,34 @@ export class SubdomainService {
       unlinkSync(configPath);
     }
     
-    // Reload Nginx (apenas se não estiver em container)
-    if (!isDockerContainer) {
+    // Reload Nginx (tentar automaticamente mesmo em container)
+    if (isDockerContainer) {
+      try {
+        const reloadScript = '/usr/local/bin/reload-nginx.sh';
+        if (existsSync(reloadScript)) {
+          await execAsync(`sh ${reloadScript}`);
+          logger.info('Nginx reloaded after subdomain deletion via script');
+        } else {
+          await execAsync('systemctl reload nginx');
+          logger.info('Nginx reloaded after subdomain deletion');
+        }
+      } catch (error) {
+        logger.warn('Failed to reload Nginx after deletion, manual reload required', { 
+          error: error.message 
+        });
+      }
+    } else {
       try {
         await execAsync(NGINX_RELOAD);
         logger.info('Nginx reloaded after subdomain deletion');
       } catch (error) {
         logger.error('Failed to reload Nginx', { error: error.message });
       }
-    } else {
-      logger.warn('Nginx reload skipped in container. Please reload manually: systemctl reload nginx');
     }
     
     // TODO: Remove DNS records
     // TODO: Remove SSL certificates
   }
+  
 }
 

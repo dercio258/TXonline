@@ -32,6 +32,8 @@ services:
       # CRÍTICO: Acesso aos diretórios do Nginx para criar/gerenciar subdomínios
       - /etc/nginx/sites-available:/etc/nginx/sites-available
       - /etc/nginx/sites-enabled:/etc/nginx/sites-enabled
+      # Script para recarregar Nginx no host
+      - ./scripts/reload-nginx.sh:/usr/local/bin/reload-nginx.sh:ro
     depends_on:
       - mysql
     restart: unless-stopped
