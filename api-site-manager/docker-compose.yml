@@ -21,7 +21,8 @@ services:
       - SSL_EMAIL=${SSL_EMAIL:-admin@mozloja.online}
     volumes:
       # Compartilhar diretório de sites com host (para Nginx acessar)
-      - ./sites:/var/www
+      # Sites serão criados em /var/www no host (padrão do Nginx)
+      - /var/www:/var/www
       # Logs
       - ./logs:/app/logs
       # Uploads temporários

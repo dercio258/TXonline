@@ -12,6 +12,8 @@ services:
       # Montar código para hot reload
       - .:/app
       - /app/node_modules
+      # Compartilhar diretório de sites com host (para Nginx acessar)
+      - /var/www:/var/www
       # CRÍTICO: Acesso aos diretórios do Nginx para criar/gerenciar subdomínios
       - /etc/nginx/sites-available:/etc/nginx/sites-available
       - /etc/nginx/sites-enabled:/etc/nginx/sites-enabled
