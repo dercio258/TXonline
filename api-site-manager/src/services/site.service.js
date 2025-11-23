@@ -32,29 +32,87 @@ export class SiteService {
     logger.info('Site directory created', { path: sitePath });
     
     // Set correct permissions (www-data:www-data or nginx:nginx)
-    try {
-      await execAsync(`chown -R www-data:www-data "${sitePath}" || chown -R nginx:nginx "${sitePath}" || chown -R 33:33 "${sitePath}"`);
-      await execAsync(`chmod -R 755 "${sitePath}"`);
-      logger.info('Permissions set for site directory', { path: sitePath });
-    } catch (error) {
-      logger.warn('Failed to set permissions, continuing anyway', { error: error.message });
+    // Tentar múltiplos métodos até um funcionar
+    let permissionsSet = false;
+    const permissionMethods = [
+      async () => {
+        await execAsync(`chown -R www-data:www-data "${sitePath}"`);
+        return 'www-data';
+      },
+      async () => {
+        await execAsync(`chown -R nginx:nginx "${sitePath}"`);
+        return 'nginx';
+      },
+      async () => {
+        await execAsync(`chown -R 33:33 "${sitePath}"`);
+        return 'uid33';
+      }
+    ];
+    
+    for (const method of permissionMethods) {
+      try {
+        const methodName = await method();
+        await execAsync(`chmod -R 755 "${sitePath}"`);
+        logger.info('Permissions set for site directory', { path: sitePath, method: methodName });
+        permissionsSet = true;
+        break;
+      } catch (error) {
+        logger.debug(`Permission method failed: ${error.message}`);
+        continue;
+      }
+    }
+    
+    if (!permissionsSet) {
+      logger.warn('Failed to set permissions with all methods, continuing anyway');
     }
     
     // Create default index.html for static sites
     if (type === 'static' || !type) {
-      const indexHtml = this.generateDefaultIndexHtml(subdomain);
-      const indexPath = join(sitePath, 'index.html');
-      writeFileSync(indexPath, indexHtml, 'utf8');
-      
-      // Set permissions for index.html
       try {
-        await execAsync(`chown www-data:www-data "${indexPath}" || chown nginx:nginx "${indexPath}" || chown 33:33 "${indexPath}"`);
-        await execAsync(`chmod 644 "${indexPath}"`);
+        const indexHtml = this.generateDefaultIndexHtml(subdomain);
+        const indexPath = join(sitePath, 'index.html');
+        writeFileSync(indexPath, indexHtml, 'utf8');
+        logger.info('Default index.html created', { path: indexPath });
+        
+        // Set permissions for index.html (tentar múltiplos métodos)
+        let filePermissionsSet = false;
+        const filePermissionMethods = [
+          async () => {
+            await execAsync(`chown www-data:www-data "${indexPath}"`);
+            await execAsync(`chmod 644 "${indexPath}"`);
+            return 'www-data';
+          },
+          async () => {
+            await execAsync(`chown nginx:nginx "${indexPath}"`);
+            await execAsync(`chmod 644 "${indexPath}"`);
+            return 'nginx';
+          },
+          async () => {
+            await execAsync(`chown 33:33 "${indexPath}"`);
+            await execAsync(`chmod 644 "${indexPath}"`);
+            return 'uid33';
+          }
+        ];
+        
+        for (const method of filePermissionMethods) {
+          try {
+            const methodName = await method();
+            logger.info('Permissions set for index.html', { path: indexPath, method: methodName });
+            filePermissionsSet = true;
+            break;
+          } catch (error) {
+            logger.debug(`File permission method failed: ${error.message}`);
+            continue;
+          }
+        }
+        
+        if (!filePermissionsSet) {
+          logger.warn('Failed to set permissions for index.html with all methods');
+        }
       } catch (error) {
-        logger.warn('Failed to set permissions for index.html', { error: error.message });
+        logger.error('Failed to create index.html', { error: error.message, path: sitePath });
+        // Não lançar erro - site pode funcionar sem index.html
       }
-      
-      logger.info('Default index.html created', { path: indexPath });
     }
     
     // Create subdomain in Nginx with SSL (automatic)
