@@ -57,17 +57,28 @@ export class SubdomainService {
     }
     
     // Reload Nginx
-    // Em container, usar script mapeado para recarregar no host
+    // Em container, executar script no host via docker exec
     if (isDockerContainer) {
       try {
-        const reloadScript = '/usr/local/bin/reload-nginx.sh';
-        if (existsSync(reloadScript)) {
-          await execAsync(`sh ${reloadScript}`);
-          logger.info('Nginx reloaded successfully via script');
-        } else {
-          // Fallback: tentar executar diretamente (pode funcionar se container tem privilégios)
-          await execAsync('systemctl reload nginx');
-          logger.info('Nginx reloaded successfully');
+        // Tentar executar script no host via docker exec (se container tem acesso)
+        // Usar o próprio container para executar no host
+        const containerName = process.env.HOSTNAME || 'txuna-api';
+        const scriptPath = '/var/www/mozloja.online/api-site-manager/scripts/reload-nginx.sh';
+        
+        // Tentar executar via nsenter (acessa namespace do host)
+        try {
+          // Obter PID do processo init do host (geralmente 1)
+          await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl reload nginx"`);
+          logger.info('Nginx reloaded successfully via nsenter');
+        } catch (nsenterError) {
+          // Fallback: tentar executar script mapeado (pode não funcionar se Nginx não está no container)
+          const reloadScript = '/usr/local/bin/reload-nginx.sh';
+          if (existsSync(reloadScript)) {
+            await execAsync(`sh ${reloadScript}`);
+            logger.info('Nginx reloaded successfully via script');
+          } else {
+            throw new Error('Could not reload Nginx: script not found and nsenter failed');
+          }
         }
       } catch (error) {
         logger.warn('Failed to reload Nginx automatically, manual reload required', { 
@@ -97,21 +108,42 @@ export class SubdomainService {
         const sslConfig = await SSLService.updateNginxSSLConfig(fullDomain, sitePath);
         writeFileSync(configPath, sslConfig);
         
-        // Reload Nginx again (tentar automaticamente mesmo em container)
+        // Reload Nginx again (tentar múltiplos métodos)
         if (isDockerContainer) {
-          try {
-            const reloadScript = '/usr/local/bin/reload-nginx.sh';
-            if (existsSync(reloadScript)) {
-              await execAsync(`sh ${reloadScript}`);
-              logger.info('Nginx reloaded with SSL configuration via script');
-            } else {
-              await execAsync('systemctl reload nginx');
-              logger.info('Nginx reloaded with SSL configuration');
+          let reloaded = false;
+          const reloadMethods = [
+            async () => {
+              await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl reload nginx"`);
+              return 'nsenter';
+            },
+            async () => {
+              const reloadScript = '/usr/local/bin/reload-nginx.sh';
+              if (existsSync(reloadScript)) {
+                await execAsync(`sh ${reloadScript}`);
+                return 'script';
+              }
+              throw new Error('Script not found');
+            },
+            async () => {
+              await execAsync('nginx -t && systemctl reload nginx');
+              return 'direct';
             }
-          } catch (error) {
-            logger.warn('Failed to reload Nginx after SSL, manual reload required', { 
-              error: error.message 
-            });
+          ];
+          
+          for (const method of reloadMethods) {
+            try {
+              const methodName = await method();
+              logger.info(`Nginx reloaded with SSL configuration via ${methodName}`);
+              reloaded = true;
+              break;
+            } catch (error) {
+              logger.debug(`Reload method failed: ${error.message}`);
+              continue;
+            }
+          }
+          
+          if (!reloaded) {
+            logger.warn('Failed to reload Nginx after SSL, manual reload required');
           }
         } else {
           await execAsync(NGINX_RELOAD);
@@ -146,28 +178,43 @@ export class SubdomainService {
     server_name ${domain};
     
     root ${rootPath};
-    index index.html index.php;
+    index index.html index.htm index.php;
     
     # Logs
     access_log /var/log/nginx/${domain}-access.log;
     error_log /var/log/nginx/${domain}-error.log;
     
-    # WordPress configuration (if applicable)
+    # Prevent 403 Forbidden - allow directory listing if no index file
+    autoindex off;
+    
+    # Main location block
     location / {
-        try_files $uri $uri/ /index.php?$args;
+        try_files $uri $uri/ /index.html /index.php?$args;
+        # Allow access to all files
+        allow all;
     }
     
+    # PHP configuration (if applicable)
     location ~ \\.php$ {
+        try_files $uri =404;
         fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
     }
     
-    # Static files
-    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+    # Static files with caching
+    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot|webp)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+    
+    # Deny access to hidden files
+    location ~ /\\. {
+        deny all;
+        access_log off;
+        log_not_found off;
     }
     
     # Security headers
@@ -185,33 +232,48 @@ export class SubdomainService {
     server_name ${domain};
     
     root ${rootPath};
-    index index.html index.php;
+    index index.html index.htm index.php;
     
     # Let's Encrypt validation
     location /.well-known/acme-challenge/ {
         root /var/www/html;
+        allow all;
     }
     
     # Logs
     access_log /var/log/nginx/${domain}-access.log;
     error_log /var/log/nginx/${domain}-error.log;
     
-    # WordPress configuration (if applicable)
+    # Prevent 403 Forbidden
+    autoindex off;
+    
+    # Main location block
     location / {
-        try_files $uri $uri/ /index.php?$args;
+        try_files $uri $uri/ /index.html /index.php?$args;
+        allow all;
     }
     
+    # PHP configuration (if applicable)
     location ~ \\.php$ {
+        try_files $uri =404;
         fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
     }
     
-    # Static files
-    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
+    # Static files with caching
+    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot|webp)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+    
+    # Deny access to hidden files
+    location ~ /\\. {
+        deny all;
+        access_log off;
+        log_not_found off;
     }
     
     # Security headers

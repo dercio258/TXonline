@@ -31,11 +31,29 @@ export class SiteService {
     mkdirSync(sitePath, { recursive: true });
     logger.info('Site directory created', { path: sitePath });
     
+    // Set correct permissions (www-data:www-data or nginx:nginx)
+    try {
+      await execAsync(`chown -R www-data:www-data "${sitePath}" || chown -R nginx:nginx "${sitePath}" || chown -R 33:33 "${sitePath}"`);
+      await execAsync(`chmod -R 755 "${sitePath}"`);
+      logger.info('Permissions set for site directory', { path: sitePath });
+    } catch (error) {
+      logger.warn('Failed to set permissions, continuing anyway', { error: error.message });
+    }
+    
     // Create default index.html for static sites
     if (type === 'static' || !type) {
       const indexHtml = this.generateDefaultIndexHtml(subdomain);
       const indexPath = join(sitePath, 'index.html');
       writeFileSync(indexPath, indexHtml, 'utf8');
+      
+      // Set permissions for index.html
+      try {
+        await execAsync(`chown www-data:www-data "${indexPath}" || chown nginx:nginx "${indexPath}" || chown 33:33 "${indexPath}"`);
+        await execAsync(`chmod 644 "${indexPath}"`);
+      } catch (error) {
+        logger.warn('Failed to set permissions for index.html', { error: error.message });
+      }
+      
       logger.info('Default index.html created', { path: indexPath });
     }
     

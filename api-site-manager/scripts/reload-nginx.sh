@@ -3,16 +3,21 @@
 # Script para recarregar Nginx no host
 # Pode ser chamado manualmente ou via cron após criação de subdomínios
 
-echo "🔄 Recarregando Nginx..."
+set -e
 
 # Testar configuração
-if nginx -t; then
+if nginx -t > /dev/null 2>&1; then
     # Recarregar
-    systemctl reload nginx
-    echo "✅ Nginx recarregado com sucesso"
-    exit 0
+    if systemctl reload nginx > /dev/null 2>&1; then
+        exit 0
+    else
+        # Tentar recarregar via kill -HUP se systemctl falhar
+        if [ -f /var/run/nginx.pid ]; then
+            kill -HUP $(cat /var/run/nginx.pid) 2>/dev/null && exit 0
+        fi
+        exit 1
+    fi
 else
-    echo "❌ Erro na configuração do Nginx"
     exit 1
 fi
 
