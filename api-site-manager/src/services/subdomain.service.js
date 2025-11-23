@@ -81,9 +81,13 @@ export class SubdomainService {
         const sslConfig = await SSLService.updateNginxSSLConfig(fullDomain, sitePath);
         writeFileSync(configPath, sslConfig);
         
-        // Reload Nginx again
-        await execAsync(NGINX_RELOAD);
-        logger.info('Nginx reloaded with SSL configuration');
+        // Reload Nginx again (apenas se não estiver em container)
+        if (!isDockerContainer) {
+          await execAsync(NGINX_RELOAD);
+          logger.info('Nginx reloaded with SSL configuration');
+        } else {
+          logger.warn('Nginx reload skipped in container. Please reload manually: systemctl reload nginx');
+        }
       } catch (error) {
         logger.warn('SSL installation failed, continuing without SSL', { 
           domain: fullDomain, 
@@ -208,12 +212,16 @@ export class SubdomainService {
       unlinkSync(configPath);
     }
     
-    // Reload Nginx
-    try {
-      await execAsync(NGINX_RELOAD);
-      logger.info('Nginx reloaded after subdomain deletion');
-    } catch (error) {
-      logger.error('Failed to reload Nginx', { error: error.message });
+    // Reload Nginx (apenas se não estiver em container)
+    if (!isDockerContainer) {
+      try {
+        await execAsync(NGINX_RELOAD);
+        logger.info('Nginx reloaded after subdomain deletion');
+      } catch (error) {
+        logger.error('Failed to reload Nginx', { error: error.message });
+      }
+    } else {
+      logger.warn('Nginx reload skipped in container. Please reload manually: systemctl reload nginx');
     }
     
     // TODO: Remove DNS records
