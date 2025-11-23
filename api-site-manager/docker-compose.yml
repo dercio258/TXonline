@@ -28,6 +28,9 @@ services:
       - ./uploads:/app/uploads
       # Acesso ao socket do Docker (para criar containers dinamicamente)
       - /var/run/docker.sock:/var/run/docker.sock
+      # CRÍTICO: Acesso aos diretórios do Nginx para criar/gerenciar subdomínios
+      - /etc/nginx/sites-available:/etc/nginx/sites-available
+      - /etc/nginx/sites-enabled:/etc/nginx/sites-enabled
     depends_on:
       - mysql
     restart: unless-stopped
