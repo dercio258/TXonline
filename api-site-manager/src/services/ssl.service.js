@@ -2,6 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import logger from '../utils/logger.js';
+import { getPHPFPMSocket } from '../utils/system.js';
 
 const execAsync = promisify(exec);
 const CERTBOT_PATH = process.env.CERTBOT_PATH || '/usr/bin/certbot';
@@ -120,6 +121,9 @@ export class SSLService {
   static async updateNginxSSLConfig(domain, sitePath) {
     const configPath = `/etc/nginx/sites-available/${domain}`;
     
+    // Detectar versão do PHP automaticamente
+    const phpSocket = await getPHPFPMSocket();
+    
     // Read existing config or create new one
     const sslConfig = `
 server {
@@ -157,7 +161,7 @@ server {
     }
     
     location ~ \\.php$ {
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_pass unix:${phpSocket};
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;

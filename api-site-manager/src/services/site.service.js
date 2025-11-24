@@ -1,12 +1,13 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 import logger from '../utils/logger.js';
 import { SubdomainService } from './subdomain.service.js';
 import { SiteModel } from '../models/site.model.js';
 import { DatabaseService } from './database.service.js';
 import { FTPService } from './ftp.service.js';
+import { setPermissions, verifyDirectoryExists } from '../utils/system.js';
 
 const execAsync = promisify(exec);
 const BASE_DIR = process.env.BASE_DIR || '/var/www';
@@ -28,42 +29,44 @@ export class SiteService {
       throw new Error(`Directory ${sitePath} already exists`);
     }
     
-    mkdirSync(sitePath, { recursive: true });
-    logger.info('Site directory created', { path: sitePath });
-    
-    // Set correct permissions (www-data:www-data or nginx:nginx)
-    // Tentar múltiplos métodos até um funcionar
-    let permissionsSet = false;
-    const permissionMethods = [
-      async () => {
-        await execAsync(`chown -R www-data:www-data "${sitePath}"`);
-        return 'www-data';
-      },
-      async () => {
-        await execAsync(`chown -R nginx:nginx "${sitePath}"`);
-        return 'nginx';
-      },
-      async () => {
-        await execAsync(`chown -R 33:33 "${sitePath}"`);
-        return 'uid33';
-      }
-    ];
-    
-    for (const method of permissionMethods) {
-      try {
-        const methodName = await method();
-        await execAsync(`chmod -R 755 "${sitePath}"`);
-        logger.info('Permissions set for site directory', { path: sitePath, method: methodName });
-        permissionsSet = true;
-        break;
-      } catch (error) {
-        logger.debug(`Permission method failed: ${error.message}`);
-        continue;
-      }
+    // Criar diretório com tratamento de erro robusto
+    try {
+      mkdirSync(sitePath, { recursive: true });
+      logger.info('Site directory created', { path: sitePath });
+    } catch (error) {
+      logger.error('Failed to create site directory', { path: sitePath, error: error.message });
+      throw new Error(`Failed to create directory ${sitePath}: ${error.message}`);
     }
     
+    // Verificar se o diretório foi realmente criado
+    if (!existsSync(sitePath)) {
+      throw new Error(`Directory ${sitePath} was not created successfully`);
+    }
+    
+    // Verificar se é realmente um diretório
+    try {
+      const stats = statSync(sitePath);
+      if (!stats.isDirectory()) {
+        throw new Error(`${sitePath} exists but is not a directory`);
+      }
+    } catch (error) {
+      logger.error('Failed to verify directory', { path: sitePath, error: error.message });
+      throw new Error(`Failed to verify directory ${sitePath}: ${error.message}`);
+    }
+    
+    // Set correct permissions - usar função utilitária robusta
+    const permissionsSet = await setPermissions(sitePath, 'www-data', '755');
+    
     if (!permissionsSet) {
-      logger.warn('Failed to set permissions with all methods, continuing anyway');
+      logger.error('Failed to set permissions for site directory', { path: sitePath });
+      throw new Error(`Failed to set permissions for directory ${sitePath}. Nginx may not be able to access files.`);
+    }
+    
+    // Verificar se as permissões foram aplicadas corretamente
+    const dirAccessible = await verifyDirectoryExists(sitePath);
+    if (!dirAccessible) {
+      logger.error('Directory is not accessible after setting permissions', { path: sitePath });
+      throw new Error(`Directory ${sitePath} is not accessible. Check permissions.`);
     }
     
     // Create default index.html for static sites
@@ -74,40 +77,14 @@ export class SiteService {
         writeFileSync(indexPath, indexHtml, 'utf8');
         logger.info('Default index.html created', { path: indexPath });
         
-        // Set permissions for index.html (tentar múltiplos métodos)
-        let filePermissionsSet = false;
-        const filePermissionMethods = [
-          async () => {
-            await execAsync(`chown www-data:www-data "${indexPath}"`);
-            await execAsync(`chmod 644 "${indexPath}"`);
-            return 'www-data';
-          },
-          async () => {
-            await execAsync(`chown nginx:nginx "${indexPath}"`);
-            await execAsync(`chmod 644 "${indexPath}"`);
-            return 'nginx';
-          },
-          async () => {
-            await execAsync(`chown 33:33 "${indexPath}"`);
-            await execAsync(`chmod 644 "${indexPath}"`);
-            return 'uid33';
-          }
-        ];
-        
-        for (const method of filePermissionMethods) {
-          try {
-            const methodName = await method();
-            logger.info('Permissions set for index.html', { path: indexPath, method: methodName });
-            filePermissionsSet = true;
-            break;
-          } catch (error) {
-            logger.debug(`File permission method failed: ${error.message}`);
-            continue;
-          }
-        }
+        // Set permissions for index.html usando função utilitária
+        const filePermissionsSet = await setPermissions(indexPath, 'www-data', '644');
         
         if (!filePermissionsSet) {
-          logger.warn('Failed to set permissions for index.html with all methods');
+          logger.warn('Failed to set permissions for index.html', { path: indexPath });
+          // Não lançar erro - arquivo foi criado, apenas permissões podem estar incorretas
+        } else {
+          logger.info('Permissions set for index.html', { path: indexPath });
         }
       } catch (error) {
         logger.error('Failed to create index.html', { error: error.message, path: sitePath });

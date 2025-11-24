@@ -1,9 +1,10 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { writeFileSync, existsSync, unlinkSync, readFileSync } from 'fs';
+import { writeFileSync, existsSync, unlinkSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import logger from '../utils/logger.js';
 import { SSLService } from './ssl.service.js';
+import { getPHPFPMSocket, setPermissions, verifyDirectoryExists } from '../utils/system.js';
 
 // Verificar se está rodando em container Docker
 const isDockerContainer = existsSync('/.dockerenv');
@@ -24,10 +25,43 @@ export class SubdomainService {
     // Se não especificado, usar USE_SSL do ambiente
     const installSSL = options.installSSL === true ? true : (options.installSSL !== false && USE_SSL);
     
+    // Criar diretório do site se não existir
+    if (!existsSync(sitePath)) {
+      try {
+        mkdirSync(sitePath, { recursive: true });
+        logger.info('Site directory created', { path: sitePath });
+        
+        // Definir permissões corretas
+        const permissionsSet = await setPermissions(sitePath, 'www-data', '755');
+        if (!permissionsSet) {
+          logger.warn('Failed to set permissions for site directory', { path: sitePath });
+        }
+      } catch (error) {
+        logger.error('Failed to create site directory', { path: sitePath, error: error.message });
+        throw new Error(`Failed to create directory ${sitePath}: ${error.message}`);
+      }
+    }
+    
+    // Criar index.html básico se não existir
+    const indexPath = join(sitePath, 'index.html');
+    if (!existsSync(indexPath)) {
+      try {
+        const indexHtml = this.generateDefaultIndexHtml(subdomain);
+        writeFileSync(indexPath, indexHtml, 'utf8');
+        logger.info('Default index.html created', { path: indexPath });
+        
+        // Definir permissões do arquivo
+        await setPermissions(indexPath, 'www-data', '644');
+      } catch (error) {
+        logger.error('Failed to create index.html', { path: indexPath, error: error.message });
+        // Não lançar erro - site pode funcionar sem index.html
+      }
+    }
+    
     // Create Nginx configuration (HTTP first, SSL will be added after certificate)
     const nginxConfig = installSSL 
-      ? this.generateNginxConfigHTTP(fullDomain, sitePath)
-      : this.generateNginxConfig(fullDomain, sitePath);
+      ? await this.generateNginxConfigHTTP(fullDomain, sitePath)
+      : await this.generateNginxConfig(fullDomain, sitePath);
     
     const configPath = join(NGINX_AVAILABLE, subdomain);
     
@@ -183,7 +217,10 @@ export class SubdomainService {
     };
   }
   
-  static generateNginxConfig(domain, rootPath) {
+  static async generateNginxConfig(domain, rootPath) {
+    // Detectar versão do PHP automaticamente
+    const phpSocket = await getPHPFPMSocket();
+    
     return `server {
     listen 80;
     server_name ${domain};
@@ -208,7 +245,7 @@ export class SubdomainService {
     # PHP configuration (if applicable)
     location ~ \\.php$ {
         try_files $uri =404;
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_pass unix:${phpSocket};
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
@@ -236,8 +273,11 @@ export class SubdomainService {
 `;
   }
   
-  static generateNginxConfigHTTP(domain, rootPath) {
+  static async generateNginxConfigHTTP(domain, rootPath) {
     // HTTP config for Let's Encrypt validation
+    // Detectar versão do PHP automaticamente
+    const phpSocket = await getPHPFPMSocket();
+    
     return `server {
     listen 80;
     server_name ${domain};
@@ -267,7 +307,7 @@ export class SubdomainService {
     # PHP configuration (if applicable)
     location ~ \\.php$ {
         try_files $uri =404;
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_pass unix:${phpSocket};
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
@@ -341,6 +381,36 @@ export class SubdomainService {
     
     // TODO: Remove DNS records
     // TODO: Remove SSL certificates
+  }
+  
+  static generateDefaultIndexHtml(subdomain) {
+    const siteName = subdomain.charAt(0).toUpperCase() + subdomain.slice(1);
+    
+    return `<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${siteName} — Bem-vindo</title>
+  <style>
+    :root{--laranja:#ff7a00;--azul:#0066cc;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+    body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#fff;color:#222}
+    .card{padding:22px 28px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08);max-width:520px;text-align:left}
+    h1{margin:0 0 8px;font-size:20px;color:var(--laranja)}
+    p{margin:0 0 14px;color:#444}
+    .cta{display:inline-block;padding:10px 14px;border-radius:8px;background:var(--azul);color:#fff;text-decoration:none;font-weight:600}
+    small{display:block;margin-top:10px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Seja bem-vindo, ${siteName}!</h1>
+    <p>Esta página foi criada automaticamente pelo <strong>Txuna Site</strong> para apresentar e configurar seu site de forma rápida e profissional.</p>
+    <a class="cta" href="https://h.panel.txunasite.com" target="_blank" rel="noopener">Clique aqui para configurar</a>
+    <small>As cores principais são laranja e azul — personalize o texto e substitua <code>${siteName}</code>.</small>
+  </div>
+</body>
+</html>`;
   }
   
 }
