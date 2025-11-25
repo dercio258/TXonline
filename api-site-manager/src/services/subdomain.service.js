@@ -14,7 +14,7 @@ const NGINX_AVAILABLE = process.env.NGINX_SITES_AVAILABLE || '/etc/nginx/sites-a
 const NGINX_ENABLED = process.env.NGINX_SITES_ENABLED || '/etc/nginx/sites-enabled';
 const MAIN_DOMAIN = process.env.MAIN_DOMAIN || 'mozloja.online';
 const BASE_DIR = process.env.BASE_DIR || '/var/www';
-const NGINX_RELOAD = process.env.NGINX_RELOAD_CMD || 'systemctl reload nginx';
+const NGINX_RELOAD = process.env.NGINX_RELOAD_CMD || 'systemctl restart nginx';
 const USE_SSL = process.env.USE_SSL === 'true' || process.env.USE_SSL === true;
 
 export class SubdomainService {
@@ -131,13 +131,13 @@ export class SubdomainService {
       }
     }
     
-    // Reload Nginx - tentar múltiplas abordagens para garantir que funcione
+    // Restart Nginx - tentar múltiplas abordagens para garantir que funcione
     if (isDockerContainer) {
-      let reloaded = false;
-      const reloadMethods = [
+      let restarted = false;
+      const restartMethods = [
         // Método 1: nsenter (mais confiável)
         async () => {
-          await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl reload nginx"`);
+          await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl restart nginx"`);
           return 'nsenter';
         },
         // Método 2: Script mapeado
@@ -151,35 +151,35 @@ export class SubdomainService {
         },
         // Método 3: Tentar diretamente (pode funcionar com privilégios)
         async () => {
-          await execAsync('nginx -t && systemctl reload nginx');
+          await execAsync('nginx -t && systemctl restart nginx');
           return 'direct';
         }
       ];
       
-      for (const method of reloadMethods) {
+      for (const method of restartMethods) {
         try {
           const methodName = await method();
-          logger.info(`Nginx reloaded successfully via ${methodName}`);
-          reloaded = true;
+          logger.info(`Nginx restarted successfully via ${methodName}`);
+          restarted = true;
           break;
         } catch (error) {
-          logger.debug(`Reload method failed: ${error.message}`);
+          logger.debug(`Restart method failed: ${error.message}`);
           continue;
         }
       }
       
-      if (!reloaded) {
-        logger.warn('All Nginx reload methods failed, manual reload required');
-        logger.warn('Please reload manually: systemctl reload nginx');
-        // Não lançar erro - site foi criado, apenas precisa reload manual
+      if (!restarted) {
+        logger.warn('All Nginx restart methods failed, manual restart required');
+        logger.warn('Please restart manually: systemctl restart nginx');
+        // Não lançar erro - site foi criado, apenas precisa restart manual
       }
     } else {
       try {
         await execAsync(NGINX_RELOAD);
-        logger.info('Nginx reloaded successfully');
+        logger.info('Nginx restarted successfully');
       } catch (error) {
-        logger.error('Failed to reload Nginx', { error: error.message });
-        throw new Error(`Failed to reload Nginx: ${error.message}`);
+        logger.error('Failed to restart Nginx', { error: error.message });
+        throw new Error(`Failed to restart Nginx: ${error.message}`);
       }
     }
     
@@ -187,19 +187,39 @@ export class SubdomainService {
     let sslInfo = null;
     if (installSSL) {
       try {
-        sslInfo = await SSLService.installSSL(fullDomain);
-        logger.info('SSL certificate installed', { domain: fullDomain });
+        // Aguardar um pouco para garantir que o site está acessível antes de instalar SSL
+        logger.info('Waiting before SSL installation to ensure site is accessible', { domain: fullDomain });
+        await new Promise(resolve => setTimeout(resolve, 5000)); // 5 segundos
         
-        // Update Nginx config with SSL
+        // Instalar SSL com verificações automáticas
+        sslInfo = await SSLService.installSSL(fullDomain, null, {
+          skipDNSCheck: options.skipDNSCheck === true,
+          skipHTTPCheck: options.skipHTTPCheck === true,
+          waitForDNS: options.waitForDNS !== false
+        });
+        
+        logger.info('SSL certificate installed successfully', { domain: fullDomain, sslInfo });
+        
+        // O certbot já atualiza a configuração do Nginx automaticamente
+        // Mas vamos garantir que a configuração está correta
         const sslConfig = await SSLService.updateNginxSSLConfig(fullDomain, sitePath);
         writeFileSync(configPath, sslConfig);
         
-        // Reload Nginx again (tentar múltiplos métodos)
+        // Verificar configuração do Nginx antes de reiniciar
+        try {
+          await execAsync('nginx -t');
+          logger.debug('Nginx configuration test passed after SSL installation');
+        } catch (error) {
+          logger.error('Nginx configuration test failed after SSL installation', { error: error.message });
+          throw new Error(`Nginx configuration is invalid after SSL installation: ${error.message}`);
+        }
+        
+        // Restart Nginx (tentar múltiplos métodos)
         if (isDockerContainer) {
-          let reloaded = false;
-          const reloadMethods = [
+          let restarted = false;
+          const restartMethods = [
             async () => {
-              await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl reload nginx"`);
+              await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl restart nginx"`);
               return 'nsenter';
             },
             async () => {
@@ -211,36 +231,54 @@ export class SubdomainService {
               throw new Error('Script not found');
             },
             async () => {
-              await execAsync('nginx -t && systemctl reload nginx');
+              await execAsync('nginx -t && systemctl restart nginx');
               return 'direct';
             }
           ];
           
-          for (const method of reloadMethods) {
+          for (const method of restartMethods) {
             try {
               const methodName = await method();
-              logger.info(`Nginx reloaded with SSL configuration via ${methodName}`);
-              reloaded = true;
+              logger.info(`Nginx restarted with SSL configuration via ${methodName}`);
+              restarted = true;
               break;
             } catch (error) {
-              logger.debug(`Reload method failed: ${error.message}`);
+              logger.debug(`Restart method failed: ${error.message}`);
               continue;
             }
           }
           
-          if (!reloaded) {
-            logger.warn('Failed to reload Nginx after SSL, manual reload required');
+          if (!restarted) {
+            logger.warn('Failed to restart Nginx after SSL, manual restart required');
+            logger.warn('Please restart manually: systemctl restart nginx');
           }
         } else {
           await execAsync(NGINX_RELOAD);
-          logger.info('Nginx reloaded with SSL configuration');
+          logger.info('Nginx restarted with SSL configuration');
         }
+        
+        // Verificar se o certificado está realmente funcionando
+        const certExists = existsSync(`/etc/letsencrypt/live/${fullDomain}/fullchain.pem`);
+        if (!certExists) {
+          logger.error('SSL certificate file not found after installation', { domain: fullDomain });
+          throw new Error('SSL certificate was not created successfully');
+        }
+        
       } catch (error) {
-        logger.warn('SSL installation failed, continuing without SSL', { 
+        logger.error('SSL installation failed', { 
           domain: fullDomain, 
-          error: error.message 
+          error: error.message,
+          stack: error.stack
         });
-        // Continue without SSL - can be installed later
+        
+        // Se a instalação de SSL falhar, continuar sem SSL mas avisar
+        logger.warn('Site created without SSL. SSL can be installed later manually.', { 
+          domain: fullDomain,
+          error: error.message
+        });
+        
+        // Não lançar erro - site foi criado, apenas SSL falhou
+        // O usuário pode instalar SSL depois manualmente
       }
     }
     
@@ -395,28 +433,28 @@ export class SubdomainService {
       unlinkSync(configPath);
     }
     
-    // Reload Nginx (tentar automaticamente mesmo em container)
+    // Restart Nginx (tentar automaticamente mesmo em container)
     if (isDockerContainer) {
       try {
         const reloadScript = '/usr/local/bin/reload-nginx.sh';
         if (existsSync(reloadScript)) {
           await execAsync(`sh ${reloadScript}`);
-          logger.info('Nginx reloaded after subdomain deletion via script');
+          logger.info('Nginx restarted after subdomain deletion via script');
         } else {
-          await execAsync('systemctl reload nginx');
-          logger.info('Nginx reloaded after subdomain deletion');
+          await execAsync('systemctl restart nginx');
+          logger.info('Nginx restarted after subdomain deletion');
         }
       } catch (error) {
-        logger.warn('Failed to reload Nginx after deletion, manual reload required', { 
+        logger.warn('Failed to restart Nginx after deletion, manual restart required', { 
           error: error.message 
         });
       }
     } else {
       try {
         await execAsync(NGINX_RELOAD);
-        logger.info('Nginx reloaded after subdomain deletion');
+        logger.info('Nginx restarted after subdomain deletion');
       } catch (error) {
-        logger.error('Failed to reload Nginx', { error: error.message });
+        logger.error('Failed to restart Nginx', { error: error.message });
       }
     }
     
