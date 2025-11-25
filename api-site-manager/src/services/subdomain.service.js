@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { writeFileSync, existsSync, unlinkSync, readFileSync, mkdirSync } from 'fs';
+import { writeFileSync, existsSync, unlinkSync, readFileSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
 import logger from '../utils/logger.js';
 import { SSLService } from './ssl.service.js';
@@ -31,10 +31,29 @@ export class SubdomainService {
         mkdirSync(sitePath, { recursive: true });
         logger.info('Site directory created', { path: sitePath });
         
-        // Definir permissões corretas
+        // Verificar se o diretório foi realmente criado
+        if (!existsSync(sitePath)) {
+          throw new Error(`Directory ${sitePath} was not created successfully`);
+        }
+        
+        // Verificar se é realmente um diretório
+        const stats = statSync(sitePath);
+        if (!stats.isDirectory()) {
+          throw new Error(`${sitePath} exists but is not a directory`);
+        }
+        
+        // Definir permissões corretas ANTES de criar arquivos
         const permissionsSet = await setPermissions(sitePath, 'www-data', '755');
         if (!permissionsSet) {
-          logger.warn('Failed to set permissions for site directory', { path: sitePath });
+          logger.error('Failed to set permissions for site directory', { path: sitePath });
+          throw new Error(`Failed to set permissions for directory ${sitePath}. Nginx may not be able to access files.`);
+        }
+        
+        // Verificar se o diretório é acessível após definir permissões
+        const dirAccessible = await verifyDirectoryExists(sitePath);
+        if (!dirAccessible) {
+          logger.error('Directory is not accessible after setting permissions', { path: sitePath });
+          throw new Error(`Directory ${sitePath} is not accessible. Check permissions.`);
         }
       } catch (error) {
         logger.error('Failed to create site directory', { path: sitePath, error: error.message });
@@ -51,10 +70,32 @@ export class SubdomainService {
         logger.info('Default index.html created', { path: indexPath });
         
         // Definir permissões do arquivo
-        await setPermissions(indexPath, 'www-data', '644');
+        const filePermissionsSet = await setPermissions(indexPath, 'www-data', '644');
+        if (!filePermissionsSet) {
+          logger.warn('Failed to set permissions for index.html', { path: indexPath });
+        }
       } catch (error) {
         logger.error('Failed to create index.html', { path: indexPath, error: error.message });
         // Não lançar erro - site pode funcionar sem index.html
+      }
+    }
+    
+    // Criar index.php padrão se não existir (para suporte PHP)
+    const indexPhpPath = join(sitePath, 'index.php');
+    if (!existsSync(indexPhpPath)) {
+      try {
+        const indexPhp = this.generateDefaultIndexPhp(subdomain);
+        writeFileSync(indexPhpPath, indexPhp, 'utf8');
+        logger.info('Default index.php created', { path: indexPhpPath });
+        
+        // Definir permissões do arquivo
+        const filePermissionsSet = await setPermissions(indexPhpPath, 'www-data', '644');
+        if (!filePermissionsSet) {
+          logger.warn('Failed to set permissions for index.php', { path: indexPhpPath });
+        }
+      } catch (error) {
+        logger.error('Failed to create index.php', { path: indexPhpPath, error: error.message });
+        // Não lançar erro - site pode funcionar sem index.php
       }
     }
     
@@ -408,6 +449,55 @@ export class SubdomainService {
     <p>Esta página foi criada automaticamente pelo <strong>Txuna Site</strong> para apresentar e configurar seu site de forma rápida e profissional.</p>
     <a class="cta" href="https://h.panel.txunasite.com" target="_blank" rel="noopener">Clique aqui para configurar</a>
     <small>As cores principais são laranja e azul — personalize o texto e substitua <code>${siteName}</code>.</small>
+  </div>
+</body>
+</html>`;
+  }
+  
+  static generateDefaultIndexPhp(subdomain) {
+    const siteName = subdomain.charAt(0).toUpperCase() + subdomain.slice(1);
+    
+    return `<?php
+/**
+ * Página inicial padrão - ${siteName}
+ * Criada automaticamente pelo Txuna Site Manager
+ */
+
+// Informações do servidor
+$phpVersion = phpversion();
+$serverSoftware = $_SERVER['SERVER_SOFTWARE'] ?? 'Unknown';
+$serverName = $_SERVER['SERVER_NAME'] ?? '${subdomain}';
+
+?>
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title><?php echo htmlspecialchars($siteName); ?> — Bem-vindo</title>
+  <style>
+    :root{--laranja:#ff7a00;--azul:#0066cc;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+    body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#fff;color:#222;padding:20px}
+    .card{padding:22px 28px;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.08);max-width:520px;text-align:left}
+    h1{margin:0 0 8px;font-size:20px;color:var(--laranja)}
+    p{margin:0 0 14px;color:#444}
+    .cta{display:inline-block;padding:10px 14px;border-radius:8px;background:var(--azul);color:#fff;text-decoration:none;font-weight:600}
+    small{display:block;margin-top:10px;color:#666}
+    .info{background:#f5f5f5;padding:10px;border-radius:6px;margin-top:15px;font-size:12px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Seja bem-vindo, <?php echo htmlspecialchars($siteName); ?>!</h1>
+    <p>Esta página foi criada automaticamente pelo <strong>Txuna Site</strong> para apresentar e configurar seu site de forma rápida e profissional.</p>
+    <a class="cta" href="https://h.panel.txunasite.com" target="_blank" rel="noopener">Clique aqui para configurar</a>
+    <small>As cores principais são laranja e azul — personalize o texto e substitua <code><?php echo htmlspecialchars($siteName); ?></code>.</small>
+    <div class="info">
+      <strong>Informações do Servidor:</strong><br>
+      PHP: <?php echo htmlspecialchars($phpVersion); ?><br>
+      Servidor: <?php echo htmlspecialchars($serverSoftware); ?><br>
+      Domínio: <?php echo htmlspecialchars($serverName); ?>
+    </div>
   </div>
 </body>
 </html>`;

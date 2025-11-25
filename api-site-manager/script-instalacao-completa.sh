@@ -90,8 +90,21 @@ echo -e "${GREEN}[7/15]${NC} Instalando PHP e WP-CLI..."
 if command_exists php; then
     echo -e "${YELLOW}⚠${NC} PHP já está instalado: $(php --version | head -n 1)"
 else
-    apt install -y php8.1-fpm php8.1-mysql php8.1-xml php8.1-curl php8.1-mbstring php8.1-zip
-    echo -e "${GREEN}✓${NC} PHP instalado"
+    # Tentar instalar PHP 8.3 primeiro (versão mais recente)
+    if apt-cache show php8.3-fpm &>/dev/null; then
+        apt install -y php8.3-fpm php8.3-mysql php8.3-xml php8.3-curl php8.3-mbstring php8.3-zip
+        echo -e "${GREEN}✓${NC} PHP 8.3 instalado"
+    elif apt-cache show php8.2-fpm &>/dev/null; then
+        apt install -y php8.2-fpm php8.2-mysql php8.2-xml php8.2-curl php8.2-mbstring php8.2-zip
+        echo -e "${GREEN}✓${NC} PHP 8.2 instalado"
+    elif apt-cache show php8.1-fpm &>/dev/null; then
+        apt install -y php8.1-fpm php8.1-mysql php8.1-xml php8.1-curl php8.1-mbstring php8.1-zip
+        echo -e "${GREEN}✓${NC} PHP 8.1 instalado"
+    else
+        # Fallback para versão padrão do repositório
+        apt install -y php-fpm php-mysql php-xml php-curl php-mbstring php-zip
+        echo -e "${GREEN}✓${NC} PHP instalado (versão padrão do repositório)"
+    fi
 fi
 
 if command_exists wp; then

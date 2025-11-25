@@ -16,6 +16,13 @@ NGINX_AVAILABLE="/etc/nginx/sites-available"
 NGINX_ENABLED="/etc/nginx/sites-enabled"
 FULL_DOMAIN="${SUBDOMAIN}.${DOMAIN}"
 
+# Detectar versão do PHP automaticamente
+PHP_SOCKET=$(ls /var/run/php/php*-fpm.sock 2>/dev/null | head -n1)
+if [ -z "$PHP_SOCKET" ]; then
+    # Fallback para PHP 8.3 (versão mais recente comum)
+    PHP_SOCKET="/var/run/php/php8.3-fpm.sock"
+fi
+
 # Criar configuração Nginx
 CONFIG_FILE="${NGINX_AVAILABLE}/${SUBDOMAIN}"
 
@@ -35,7 +42,7 @@ server {
     }
     
     location ~ \\.php$ {
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_pass unix:${PHP_SOCKET};
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;

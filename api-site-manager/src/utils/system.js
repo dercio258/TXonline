@@ -119,31 +119,45 @@ export async function verifyDirectoryExists(path) {
 export async function setPermissions(path, owner = 'www-data', permissions = '755') {
   const execAsync = promisify(exec);
   
-  // Lista de métodos para tentar
+  // Garantir que o caminho existe
+  if (!existsSync(path)) {
+    logger.error('Path does not exist for permission setting', { path });
+    return false;
+  }
+  
+  // Lista de métodos para tentar - SEMPRE tentar www-data primeiro
   const methods = [
-    // Método 1: www-data
+    // Método 1: www-data (prioridade máxima - Nginx usa www-data)
     async () => {
       await execAsync(`chown -R www-data:www-data "${path}"`);
       await execAsync(`chmod -R ${permissions} "${path}"`);
+      // Verificar se funcionou
+      const { stdout } = await execAsync(`stat -c '%U:%G' "${path}"`);
+      if (!stdout.trim().includes('www-data')) {
+        throw new Error('chown did not set www-data correctly');
+      }
       return 'www-data';
     },
-    // Método 2: nginx
+    // Método 2: Tentar com o owner especificado (se diferente de www-data)
+    async () => {
+      if (owner !== 'www-data') {
+        await execAsync(`chown -R ${owner} "${path}"`);
+        await execAsync(`chmod -R ${permissions} "${path}"`);
+        return owner;
+      }
+      throw new Error('Skipping - same as method 1');
+    },
+    // Método 3: nginx (fallback)
     async () => {
       await execAsync(`chown -R nginx:nginx "${path}"`);
       await execAsync(`chmod -R ${permissions} "${path}"`);
       return 'nginx';
     },
-    // Método 3: UID 33 (www-data em alguns sistemas)
+    // Método 4: UID 33 (www-data em alguns sistemas)
     async () => {
       await execAsync(`chown -R 33:33 "${path}"`);
       await execAsync(`chmod -R ${permissions} "${path}"`);
       return 'uid33';
-    },
-    // Método 4: Tentar com o owner especificado
-    async () => {
-      await execAsync(`chown -R ${owner} "${path}"`);
-      await execAsync(`chmod -R ${permissions} "${path}"`);
-      return owner;
     }
   ];
 
@@ -151,6 +165,16 @@ export async function setPermissions(path, owner = 'www-data', permissions = '75
     try {
       const methodName = await method();
       logger.info('Permissions set successfully', { path, method: methodName, permissions });
+      
+      // Verificação adicional: tentar ler o diretório para garantir que está acessível
+      try {
+        const { readdirSync } = await import('fs');
+        readdirSync(path);
+        logger.debug('Directory is accessible after permission change', { path });
+      } catch (readError) {
+        logger.warn('Directory may not be fully accessible', { path, error: readError.message });
+      }
+      
       return true;
     } catch (error) {
       logger.debug(`Permission method failed: ${error.message}`);
