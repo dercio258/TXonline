@@ -18,6 +18,54 @@ const NGINX_RELOAD = process.env.NGINX_RELOAD_CMD || 'systemctl restart nginx';
 const USE_SSL = process.env.USE_SSL === 'true' || process.env.USE_SSL === true;
 
 export class SubdomainService {
+  /**
+   * Reinicia o Nginx usando múltiplos métodos até um funcionar
+   * @param {boolean} isDockerContainer - Se está rodando em container Docker
+   * @returns {Promise<boolean>} True se conseguiu reiniciar
+   */
+  static async restartNginx(isDockerContainer) {
+    const restartMethods = [
+      // Método 1: nsenter (mais confiável para containers)
+      async () => {
+        await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl restart nginx"`);
+        return 'nsenter';
+      },
+      // Método 2: Script mapeado
+      async () => {
+        const reloadScript = '/usr/local/bin/reload-nginx.sh';
+        if (existsSync(reloadScript)) {
+          await execAsync(`sh ${reloadScript}`);
+          return 'script';
+        }
+        throw new Error('Script not found');
+      },
+      // Método 3: Tentar diretamente (pode funcionar com privilégios)
+      async () => {
+        await execAsync('nginx -t && systemctl restart nginx');
+        return 'direct';
+      },
+      // Método 4: Tentar apenas restart sem testar (último recurso)
+      async () => {
+        await execAsync('systemctl restart nginx');
+        return 'direct-no-test';
+      }
+    ];
+
+    for (const method of restartMethods) {
+      try {
+        const methodName = await method();
+        logger.info(`Nginx restarted successfully via ${methodName}`);
+        return true;
+      } catch (error) {
+        logger.debug(`Restart method failed: ${error.message}`);
+        continue;
+      }
+    }
+
+    logger.error('All Nginx restart methods failed');
+    return false;
+  }
+
   static async createSubdomain(subdomain, options = {}) {
     const fullDomain = `${subdomain}.${MAIN_DOMAIN}`;
     const sitePath = join(BASE_DIR, subdomain);
@@ -132,55 +180,11 @@ export class SubdomainService {
     }
     
     // Restart Nginx - tentar múltiplas abordagens para garantir que funcione
-    if (isDockerContainer) {
-      let restarted = false;
-      const restartMethods = [
-        // Método 1: nsenter (mais confiável)
-        async () => {
-          await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl restart nginx"`);
-          return 'nsenter';
-        },
-        // Método 2: Script mapeado
-        async () => {
-          const reloadScript = '/usr/local/bin/reload-nginx.sh';
-          if (existsSync(reloadScript)) {
-            await execAsync(`sh ${reloadScript}`);
-            return 'script';
-          }
-          throw new Error('Script not found');
-        },
-        // Método 3: Tentar diretamente (pode funcionar com privilégios)
-        async () => {
-          await execAsync('nginx -t && systemctl restart nginx');
-          return 'direct';
-        }
-      ];
-      
-      for (const method of restartMethods) {
-        try {
-          const methodName = await method();
-          logger.info(`Nginx restarted successfully via ${methodName}`);
-          restarted = true;
-          break;
-        } catch (error) {
-          logger.debug(`Restart method failed: ${error.message}`);
-          continue;
-        }
-      }
-      
-      if (!restarted) {
-        logger.warn('All Nginx restart methods failed, manual restart required');
-        logger.warn('Please restart manually: systemctl restart nginx');
-        // Não lançar erro - site foi criado, apenas precisa restart manual
-      }
-    } else {
-      try {
-        await execAsync(NGINX_RELOAD);
-        logger.info('Nginx restarted successfully');
-      } catch (error) {
-        logger.error('Failed to restart Nginx', { error: error.message });
-        throw new Error(`Failed to restart Nginx: ${error.message}`);
-      }
+    // CRÍTICO: Nginx deve estar rodando antes de instalar SSL
+    const nginxRestarted = await this.restartNginx(isDockerContainer);
+    if (!nginxRestarted) {
+      logger.error('Failed to restart Nginx after creating site configuration');
+      throw new Error('Failed to restart Nginx. Site configuration was created but Nginx needs to be restarted manually.');
     }
     
     // Install SSL certificate if enabled
@@ -214,48 +218,13 @@ export class SubdomainService {
           throw new Error(`Nginx configuration is invalid after SSL installation: ${error.message}`);
         }
         
-        // Restart Nginx (tentar múltiplos métodos)
-        if (isDockerContainer) {
-          let restarted = false;
-          const restartMethods = [
-            async () => {
-              await execAsync(`nsenter -t 1 -m -u -i -n -p sh -c "nginx -t && systemctl restart nginx"`);
-              return 'nsenter';
-            },
-            async () => {
-              const reloadScript = '/usr/local/bin/reload-nginx.sh';
-              if (existsSync(reloadScript)) {
-                await execAsync(`sh ${reloadScript}`);
-                return 'script';
-              }
-              throw new Error('Script not found');
-            },
-            async () => {
-              await execAsync('nginx -t && systemctl restart nginx');
-              return 'direct';
-            }
-          ];
-          
-          for (const method of restartMethods) {
-            try {
-              const methodName = await method();
-              logger.info(`Nginx restarted with SSL configuration via ${methodName}`);
-              restarted = true;
-              break;
-            } catch (error) {
-              logger.debug(`Restart method failed: ${error.message}`);
-              continue;
-            }
-          }
-          
-          if (!restarted) {
-            logger.warn('Failed to restart Nginx after SSL, manual restart required');
-            logger.warn('Please restart manually: systemctl restart nginx');
-          }
-        } else {
-          await execAsync(NGINX_RELOAD);
-          logger.info('Nginx restarted with SSL configuration');
+        // Restart Nginx após instalação de SSL (CRÍTICO)
+        const nginxRestartedAfterSSL = await this.restartNginx(isDockerContainer);
+        if (!nginxRestartedAfterSSL) {
+          logger.error('Failed to restart Nginx after SSL installation');
+          throw new Error('SSL certificate was installed but Nginx restart failed. Please restart manually: systemctl restart nginx');
         }
+        logger.info('Nginx restarted successfully after SSL installation');
         
         // Verificar se o certificado está realmente funcionando
         const certExists = existsSync(`/etc/letsencrypt/live/${fullDomain}/fullchain.pem`);

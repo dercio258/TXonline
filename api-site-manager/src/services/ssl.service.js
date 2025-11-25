@@ -170,13 +170,9 @@ export class SSLService {
               throw new Error('Certificate was created but could not read expiry date');
             }
             
-            // Restart Nginx após instalação bem-sucedida
-            try {
-              await execAsync(NGINX_RELOAD);
-              logger.info('Nginx restarted after SSL installation');
-            } catch (restartError) {
-              logger.warn('Failed to restart Nginx after SSL installation', { error: restartError.message });
-            }
+            // O Nginx será reiniciado pelo SubdomainService após a instalação
+            // Não reiniciar aqui para evitar conflitos
+            logger.debug('SSL certificate installed, Nginx will be restarted by SubdomainService');
             
             return {
               domain,
